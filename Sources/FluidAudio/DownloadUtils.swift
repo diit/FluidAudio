@@ -100,13 +100,14 @@ public class DownloadUtils {
         _ repo: Repo,
         modelNames: [String],
         directory: URL,
-        computeUnits: MLComputeUnits = .cpuAndNeuralEngine
+        computeUnits: MLComputeUnits = .cpuAndNeuralEngine,
+        progressHandler: ProgressHandler? = nil
     ) async throws -> [String: MLModel] {
         do {
             // 1st attempt: normal load
             return try await loadModelsOnce(
                 repo, modelNames: modelNames,
-                directory: directory, computeUnits: computeUnits)
+                directory: directory, computeUnits: computeUnits, progressHandler: progressHandler)
         } catch {
             // 1st attempt failed → wipe cache to signal redownload
             logger.warning("⚠️ First load failed: \(error.localizedDescription)")
@@ -117,7 +118,7 @@ public class DownloadUtils {
             // 2nd attempt after fresh download
             return try await loadModelsOnce(
                 repo, modelNames: modelNames,
-                directory: directory, computeUnits: computeUnits)
+                directory: directory, computeUnits: computeUnits, progressHandler: progressHandler)
         }
     }
 
@@ -132,7 +133,8 @@ public class DownloadUtils {
         _ repo: Repo,
         modelNames: [String],
         directory: URL,
-        computeUnits: MLComputeUnits = .cpuAndNeuralEngine
+        computeUnits: MLComputeUnits = .cpuAndNeuralEngine,
+        progressHandler: ProgressHandler? = nil
     ) async throws -> [String: MLModel] {
         // Ensure base directory exists
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -141,7 +143,7 @@ public class DownloadUtils {
         let repoPath = directory.appendingPathComponent(repo.folderName)
         if !FileManager.default.fileExists(atPath: repoPath.path) {
             logger.info("Models not found in cache at \(repoPath.path)")
-            try await downloadRepo(repo, to: directory)
+            try await downloadRepo(repo, to: directory, progressHandler: progressHandler)
         } else {
             logger.info("Found \(repo.folderName) locally, no download needed")
         }
@@ -225,7 +227,9 @@ public class DownloadUtils {
     }
 
     /// Download a HuggingFace repository
-    private static func downloadRepo(_ repo: Repo, to directory: URL) async throws {
+    private static func downloadRepo(
+        _ repo: Repo, to directory: URL, progressHandler: ProgressHandler? = nil
+    ) async throws {
         logger.info("📥 Downloading \(repo.folderName) from HuggingFace...")
         print("📥 Downloading \(repo.folderName)...")
 
@@ -244,7 +248,8 @@ public class DownloadUtils {
                 // Only download if this model is in our required list
                 if requiredModels.contains(file.path) {
                     logger.info("Downloading required model: \(file.path)")
-                    try await downloadModelDirectory(repo: repo, dirPath: file.path, to: repoPath)
+                    try await downloadModelDirectory(
+                        repo: repo, dirPath: file.path, to: repoPath, progressHandler: progressHandler)
                 } else {
                     logger.info("Skipping unrequired model: \(file.path)")
                 }
@@ -256,7 +261,8 @@ public class DownloadUtils {
                     path: file.path,
                     to: repoPath.appendingPathComponent(file.path),
                     expectedSize: file.size,
-                    config: .default
+                    config: .default,
+                    progressHandler: progressHandler ?? createProgressHandler(for: file.path, size: file.size)
                 )
 
             default:
@@ -291,7 +297,7 @@ public class DownloadUtils {
 
     /// Download a CoreML model directory and all its contents
     private static func downloadModelDirectory(
-        repo: Repo, dirPath: String, to destination: URL
+        repo: Repo, dirPath: String, to destination: URL, progressHandler: ProgressHandler? = nil
     )
         async throws
     {
@@ -303,7 +309,8 @@ public class DownloadUtils {
         for item in files {
             switch item.type {
             case "directory":
-                try await downloadModelDirectory(repo: repo, dirPath: item.path, to: destination)
+                try await downloadModelDirectory(
+                    repo: repo, dirPath: item.path, to: destination, progressHandler: progressHandler)
 
             case "file":
                 let expectedSize = item.lfs?.size ?? item.size
@@ -321,7 +328,7 @@ public class DownloadUtils {
                     to: destination.appendingPathComponent(item.path),
                     expectedSize: expectedSize,
                     config: .default,
-                    progressHandler: createProgressHandler(for: item.path, size: expectedSize)
+                    progressHandler: progressHandler ?? createProgressHandler(for: item.path, size: expectedSize)
                 )
 
             default:
