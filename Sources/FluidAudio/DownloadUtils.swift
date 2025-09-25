@@ -82,8 +82,30 @@ public class DownloadUtils {
         #endif
     }
 
-    /// Download progress callback
-    public typealias ProgressHandler = (Double) -> Void
+    /// Download progress information
+    public struct DownloadProgress {
+        /// Progress from 0.0 to 1.0
+        public let progress: Double
+        /// Name of the file being downloaded (e.g., "weight.bin")
+        public let fileName: String
+        /// Full path of the file being downloaded (e.g., "MelEncoder.mlmodelc/weights/weight.bin")
+        public let filePath: String
+        /// Size of the current file in bytes
+        public let fileSize: Int
+        /// Bytes downloaded for the current file
+        public let bytesDownloaded: Int
+
+        public init(progress: Double, fileName: String, filePath: String, fileSize: Int, bytesDownloaded: Int) {
+            self.progress = progress
+            self.fileName = fileName
+            self.filePath = filePath
+            self.fileSize = fileSize
+            self.bytesDownloaded = bytesDownloaded
+        }
+    }
+
+    /// Download progress callback with file information
+    public typealias ProgressHandler = (DownloadProgress) -> Void
 
     /// Download configuration
     public struct DownloadConfig {
@@ -342,15 +364,15 @@ public class DownloadUtils {
         // Only show progress for files over 100MB (most files are under this)
         guard size > 100_000_000 else { return nil }
 
-        let fileName = path.split(separator: "/").last ?? ""
+        let fileName = path.split(separator: "/").last?.description ?? ""
         var lastReportedPercentage = 0
 
-        return { progress in
-            let percentage = Int(progress * 100)
+        return { downloadProgress in
+            let percentage = Int(downloadProgress.progress * 100)
             if percentage >= lastReportedPercentage + 10 {
                 lastReportedPercentage = percentage
-                logger.info("   Progress: \(percentage)% of \(fileName)")
-                print("   ⏳ \(percentage)% downloaded of \(fileName)")
+                logger.info("   Progress: \(percentage)% of \(downloadProgress.fileName)")
+                print("   ⏳ \(percentage)% downloaded of \(downloadProgress.fileName)")
             }
         }
     }
@@ -374,7 +396,18 @@ public class DownloadUtils {
             fileSize == expectedSize
         {
             logger.info("File already downloaded: \(path)")
-            progressHandler?(1.0)
+            // Report completion
+            if let handler = progressHandler {
+                let fileName = path.split(separator: "/").last?.description ?? ""
+                let progress = DownloadProgress(
+                    progress: 1.0,
+                    fileName: fileName,
+                    filePath: path,
+                    fileSize: expectedSize,
+                    bytesDownloaded: expectedSize
+                )
+                handler(progress)
+            }
             return
         }
 
@@ -394,6 +427,22 @@ public class DownloadUtils {
         let downloadURL = URL(
             string: "https://huggingface.co/\(repo.rawValue)/resolve/main/\(path)")!
 
+        // Create progress handler wrapper for performChunkedDownload
+        let wrappedProgressHandler: ((Double) -> Void)? = progressHandler.map { handler in
+            let fileName = path.split(separator: "/").last?.description ?? ""
+            return { progress in
+                let bytesDownloaded = Int(Double(expectedSize) * progress)
+                let downloadProgress = DownloadProgress(
+                    progress: progress,
+                    fileName: fileName,
+                    filePath: path,
+                    fileSize: expectedSize,
+                    bytesDownloaded: bytesDownloaded
+                )
+                handler(downloadProgress)
+            }
+        }
+
         // Download the file (no retries)
         do {
             try await performChunkedDownload(
@@ -402,7 +451,7 @@ public class DownloadUtils {
                 startByte: startByte,
                 expectedSize: Int64(expectedSize),
                 config: config,
-                progressHandler: progressHandler
+                progressHandler: wrappedProgressHandler
             )
 
             // Verify file size before moving
@@ -442,7 +491,7 @@ public class DownloadUtils {
         startByte: Int64,
         expectedSize: Int64,
         config: DownloadConfig,
-        progressHandler: ProgressHandler?
+        progressHandler: ((Double) -> Void)?
     ) async throws {
         var request = URLRequest(url: url)
         request.timeoutInterval = config.timeout
