@@ -214,7 +214,8 @@ extension AsrModels {
     @discardableResult
     public static func download(
         to directory: URL? = nil,
-        force: Bool = false
+        force: Bool = false,
+        progressHandler: DownloadUtils.ProgressHandler? = nil
     ) async throws -> URL {
         let targetDir = directory ?? defaultCacheDirectory()
         logger.info("Downloading ASR models to: \(targetDir.path)")
@@ -245,7 +246,8 @@ extension AsrModels {
             .parakeet,
             modelNames: modelNames,
             directory: parentDir,
-            computeUnits: defaultConfiguration().computeUnits
+            computeUnits: defaultConfiguration().computeUnits,
+            progressHandler: progressHandler
         )
 
         logger.info("Successfully downloaded ASR models")
@@ -254,9 +256,10 @@ extension AsrModels {
 
     public static func downloadAndLoad(
         to directory: URL? = nil,
-        configuration: MLModelConfiguration? = nil
+        configuration: MLModelConfiguration? = nil,
+        progressHandler: DownloadUtils.ProgressHandler? = nil
     ) async throws -> AsrModels {
-        let targetDir = try await download(to: directory)
+        let targetDir = try await download(to: directory, progressHandler: progressHandler)
         return try await load(from: targetDir, configuration: configuration)
     }
 
